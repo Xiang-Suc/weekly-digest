@@ -35,15 +35,31 @@ jobs:
           set -euo pipefail
           mkdir -p public
           cp -r index.html assets src prompts public/
-          # Write runtime config.js for deployed environment
+          # Write/copy runtime config.js for deployed environment
           BASE_URL="${{ secrets.PROD_API_BASE_URL }}"
           if [ -z "$BASE_URL" ]; then BASE_URL="${{ github.event.inputs.api_base_url }}"; fi
-          if [ -z "$BASE_URL" ]; then BASE_URL="http://127.0.0.1:8001"; fi
-          cat > public/config.js <<'EOF'
-          window.CONFIG = window.CONFIG || {};
-          window.CONFIG.API_BASE_URL = "__API_BASE_URL__";
-          EOF
-          sed -i 's#__API_BASE_URL__#'"$BASE_URL"'#' public/config.js
+
+          if [ -n "$BASE_URL" ]; then
+            # Use explicit backend URL when provided via secrets or workflow input
+            cat > public/config.js <<EOF
+            window.CONFIG = window.CONFIG || {};
+            window.CONFIG.API_BASE_URL = "${BASE_URL}";
+            EOF
+            echo "Using API_BASE_URL from workflow (${BASE_URL})"
+          else
+            # No explicit URL: prefer repo's root config.js if it exists
+            if [ -f config.js ]; then
+              cp config.js public/config.js
+              echo "Copied root config.js to public/ (no secret/input provided)"
+            else
+              # Last-resort fallback for local dev
+              cat > public/config.js <<'EOF'
+              window.CONFIG = window.CONFIG || {};
+              window.CONFIG.API_BASE_URL = "http://127.0.0.1:8001";
+              EOF
+              echo "Fell back to local API_BASE_URL (http://127.0.0.1:8001)"
+            fi
+          fi
 
       - name: Upload Pages Artifact
         uses: actions/upload-pages-artifact@v3
