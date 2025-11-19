@@ -26,7 +26,6 @@
         <label>Time Zone
           <select id="tz">
             <option value="UTC">UTC</option>
-            <option value="Asia/Shanghai">Asia/Shanghai</option>
           </select>
         </label>
       </div>
@@ -34,7 +33,13 @@
 
     <section class="actions">
       <button id="btnGenerate">Load Weekly Data</button>
+      <span id="progressText" class="progress-text"></span>
     </section>
+    <!-- 顶部进度条与状态文本（默认隐藏） -->
+    <div id="progress" class="progress hidden">
+      <div id="progressFill" class="progress-bar"></div>
+    </div>
+    <!-- 状态文字已移动到按钮右侧 -->
 
     <section class="results">
       <h2>Transcripts Summary (Meeting Notes)</h2>
@@ -51,10 +56,6 @@
       <div id="trelloActivity"></div>
     </section>
 
-    <footer>
-      <small>Prompts loaded from prompts/summary_system_prompt.md · Local testing is possible by opening this page directly; for deployment, please enable GitHub Pages.</small>
-    </footer>
-
     <script type="module">
       import { fetchCommits } from './src/github.js';
       import { fetchMeetingNotes, fetchBoardActions } from './src/trello.js';
@@ -68,6 +69,35 @@
       const transcriptsEl = document.getElementById('transcriptsSummary');
       const githubEl = document.getElementById('githubCommits');
       const trelloEl = document.getElementById('trelloActivity');
+      const progressEl = document.getElementById('progress');
+      const progressFillEl = document.getElementById('progressFill');
+      const progressTextEl = document.getElementById('progressText');
+
+      function setProgress(pct = 0, label = '') {
+        progressEl.classList.remove('hidden');
+        const clamped = Math.max(0, Math.min(100, Number(pct) || 0));
+        progressFillEl.style.width = clamped + '%';
+        if (label) progressTextEl.textContent = label;
+      }
+      function resetProgress() {
+        progressFillEl.style.width = '0%';
+        progressTextEl.textContent = '';
+        progressEl.classList.add('hidden');
+      }
+      function setLoading(on) {
+        if (on) {
+          btnGenerate.disabled = true;
+          btnGenerate.dataset.originalText = btnGenerate.textContent;
+          btnGenerate.textContent = 'Loading…';
+          btnGenerate.classList.add('loading');
+          setProgress(5, 'Starting…');
+        } else {
+          btnGenerate.disabled = false;
+          btnGenerate.textContent = btnGenerate.dataset.originalText || 'Load Weekly Data';
+          btnGenerate.classList.remove('loading');
+          resetProgress();
+        }
+      }
 
       function toISO(dateStr) {
         const tz = tzEl.value || 'UTC';
@@ -79,24 +109,30 @@
         const startISO = toISO(startDateEl.value);
         const endISO = toISO(endDateEl.value);
         if (!startISO || !endISO) { alert('Please set the week start and end dates.'); return; }
+        setLoading(true);
 
         try {
           state.commits = await fetchCommits({ owner: 'ZcashUsersGroup', repo: 'zcashme', branch: 'main', since: startISO, until: endISO });
-        } catch (e) { console.error('GitHub API Error', e); alert('GitHub commits fetch failed: ' + (e?.message || e)); }
+          setProgress(33, 'GitHub commits loaded');
+        } catch (e) { console.error('GitHub API Error', e); alert('GitHub commits fetch failed: ' + (e?.message || e)); setProgress(33, 'GitHub commits failed'); }
 
         try {
           state.trello = await fetchMeetingNotes({ boardName: 'Zcash Me', listName: 'Meeting Notes', since: startISO, until: endISO });
-        } catch (e) { console.error('Trello API Error', e); alert('Trello meeting notes fetch failed: ' + (e?.message || e)); }
+          setProgress(66, 'Meeting notes loaded');
+        } catch (e) { console.error('Trello API Error', e); alert('Trello meeting notes fetch failed: ' + (e?.message || e)); setProgress(66, 'Meeting notes failed'); }
 
         // Trello board actions
         try {
           state.actions = await fetchBoardActions({ boardName: 'Zcash Me', since: startISO, until: endISO, types: 'all' });
-        } catch (e) { console.error('Trello API Error', e); alert('Trello board actions fetch failed: ' + (e?.message || e)); }
+          setProgress(90, 'Board actions loaded');
+        } catch (e) { console.error('Trello API Error', e); alert('Trello board actions fetch failed: ' + (e?.message || e)); setProgress(90, 'Board actions failed'); }
 
         // Render sections
         transcriptsEl.innerHTML = renderMeetingNotes(state.trello);
         githubEl.innerHTML = renderCommits(state.commits);
         trelloEl.innerHTML = renderActions(state.actions);
+        setProgress(100, 'Done');
+        setTimeout(() => setLoading(false), 250);
       });
 
       function esc(s) { return String(s||'').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
