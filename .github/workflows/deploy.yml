@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       api_base_url:
-        description: "Backend base URL for frontend (e.g., https://api.example.com)"
+        description: "Backend base URL for frontend https://weekly-digest-3rb8.onrender.com"
         required: false
 
 permissions:
