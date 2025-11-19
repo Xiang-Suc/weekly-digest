@@ -31,11 +31,25 @@ load_env_file()
 app = Flask(__name__)
 
 # Simple CORS for local dev and GitHub Pages
+# You can restrict origins via env: ALLOWED_ORIGINS="https://xiang-suc.github.io,https://localhost:8022"
+ALLOWED_ORIGINS = os.getenv('ALLOWED_ORIGINS', '*')
+
 @app.after_request
 def add_cors(resp):
-    resp.headers['Access-Control-Allow-Origin'] = '*'
-    resp.headers['Access-Control-Allow-Headers'] = '*'
+    origin = (request.headers.get('Origin') or '').strip()
+    allowed = ALLOWED_ORIGINS.strip()
+    # Allow specific origins list or wildcard
+    if allowed == '*' or not allowed:
+        resp.headers['Access-Control-Allow-Origin'] = origin or '*'
+    else:
+        allowed_set = {o.strip() for o in allowed.split(',') if o.strip()}
+        if origin and origin in allowed_set:
+            resp.headers['Access-Control-Allow-Origin'] = origin
+    # Ensure essential CORS headers for preflight
+    req_headers = request.headers.get('Access-Control-Request-Headers', '')
+    resp.headers['Access-Control-Allow-Headers'] = req_headers or 'Content-Type, Authorization'
     resp.headers['Access-Control-Allow-Methods'] = 'GET, POST, OPTIONS'
+    resp.headers['Vary'] = 'Origin'
     return resp
 
 @app.route('/api/github/commits', methods=['GET', 'OPTIONS'])
