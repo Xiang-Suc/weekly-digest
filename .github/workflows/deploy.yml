@@ -41,10 +41,7 @@ jobs:
 
           if [ -n "$BASE_URL" ]; then
             # Use explicit backend URL when provided via secrets or workflow input
-            cat > public/config.js <<EOF
-            window.CONFIG = window.CONFIG || {};
-            window.CONFIG.API_BASE_URL = "${BASE_URL}";
-            EOF
+            printf 'window.CONFIG = window.CONFIG || {};\nwindow.CONFIG.API_BASE_URL = "%s";\n' "$BASE_URL" > public/config.js
             echo "Using API_BASE_URL from workflow (${BASE_URL})"
           else
             # No explicit URL: prefer repo's root config.js if it exists
@@ -53,10 +50,7 @@ jobs:
               echo "Copied root config.js to public/ (no secret/input provided)"
             else
               # Last-resort fallback for local dev
-              cat > public/config.js <<'EOF'
-              window.CONFIG = window.CONFIG || {};
-              window.CONFIG.API_BASE_URL = "http://127.0.0.1:8001";
-              EOF
+              printf 'window.CONFIG = window.CONFIG || {};\nwindow.CONFIG.API_BASE_URL = "http://127.0.0.1:8001";\n' > public/config.js
               echo "Fell back to local API_BASE_URL (http://127.0.0.1:8001)"
             fi
           fi
