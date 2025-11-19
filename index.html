@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Weekly Digest (WDWDLW) - Zcash Me</title>
+    <link rel="stylesheet" href="assets/styles.css" />
+    <script src="https://unpkg.com/mammoth/mammoth.browser.min.js"></script>
+    <!-- Runtime site config: defines window.CONFIG.API_BASE_URL for deployments -->
+    <script src="config.js"></script>
+  </head>
+  <body>
+    <header>
+      <h1>Weekly Digest (WDWDLW)</h1>
+      <p>Zcash Me · Meeting Notes + GitHub Commits + Trello Activity</p>
+    </header>
+
+    <section class="controls">
+      <div class="row">
+        <label>Week Start (Monday)
+          <input type="date" id="startDate" />
+        </label>
+        <label>Week End (Next Monday)
+          <input type="date" id="endDate" />
+        </label>
+        <label>Time Zone
+          <select id="tz">
+            <option value="UTC">UTC</option>
+            <option value="Asia/Shanghai">Asia/Shanghai</option>
+          </select>
+        </label>
+      </div>
+    </section>
+
+    <section class="actions">
+      <button id="btnGenerate">Load Weekly Data</button>
+    </section>
+
+    <section class="results">
+      <h2>Transcripts Summary (Meeting Notes)</h2>
+      <div id="transcriptsSummary"></div>
+    </section>
+
+    <section class="results">
+      <h2>GitHub Commits (main)</h2>
+      <div id="githubCommits"></div>
+    </section>
+
+    <section class="results">
+      <h2>Trello Board Activity</h2>
+      <div id="trelloActivity"></div>
+    </section>
+
+    <footer>
+      <small>Prompts loaded from prompts/summary_system_prompt.md · Local testing is possible by opening this page directly; for deployment, please enable GitHub Pages.</small>
+    </footer>
+
+    <script type="module">
+      import { fetchCommits } from './src/github.js';
+      import { fetchMeetingNotes, fetchBoardActions } from './src/trello.js';
+
+      const state = { commits: [], trello: [], actions: [] };
+
+      const startDateEl = document.getElementById('startDate');
+      const endDateEl = document.getElementById('endDate');
+      const tzEl = document.getElementById('tz');
+      const btnGenerate = document.getElementById('btnGenerate');
+      const transcriptsEl = document.getElementById('transcriptsSummary');
+      const githubEl = document.getElementById('githubCommits');
+      const trelloEl = document.getElementById('trelloActivity');
+
+      function toISO(dateStr) {
+        const tz = tzEl.value || 'UTC';
+        const d = new Date(dateStr + 'T00:00:00Z');
+        return d.toISOString();
+      }
+
+      btnGenerate.addEventListener('click', async () => {
+        const startISO = toISO(startDateEl.value);
+        const endISO = toISO(endDateEl.value);
+        if (!startISO || !endISO) { alert('Please set the week start and end dates.'); return; }
+
+        try {
+          state.commits = await fetchCommits({ owner: 'ZcashUsersGroup', repo: 'zcashme', branch: 'main', since: startISO, until: endISO });
+        } catch (e) { console.error('GitHub API Error', e); alert('GitHub commits fetch failed: ' + (e?.message || e)); }
+
+        try {
+          state.trello = await fetchMeetingNotes({ boardName: 'Zcash Me', listName: 'Meeting Notes', since: startISO, until: endISO });
+        } catch (e) { console.error('Trello API Error', e); alert('Trello meeting notes fetch failed: ' + (e?.message || e)); }
+
+        // Trello board actions
+        try {
+          state.actions = await fetchBoardActions({ boardName: 'Zcash Me', since: startISO, until: endISO, types: 'all' });
+        } catch (e) { console.error('Trello API Error', e); alert('Trello board actions fetch failed: ' + (e?.message || e)); }
+
+        // Render sections
+        transcriptsEl.innerHTML = renderMeetingNotes(state.trello);
+        githubEl.innerHTML = renderCommits(state.commits);
+        trelloEl.innerHTML = renderActions(state.actions);
+      });
+
+      function esc(s) { return String(s||'').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+      function firstLine(s){return String(s||'').split('\n')[0].trim()}
+
+      function renderCommits(commits = []) {
+        if (!Array.isArray(commits) || commits.length === 0) return '<p>No commits.</p>';
+        return '<ul>' + commits.map(c => 
+          `<li>${esc(c.date || '')} ${esc(c.author || '')}: ${esc(firstLine(c.message || ''))} ` +
+          (c.url ? `<a href="${esc(c.url)}" target="_blank">link</a>` : '') + '</li>'
+        ).join('') + '</ul>';
+      }
+
+      function renderMeetingNotes(cards = []) {
+        if (!Array.isArray(cards) || cards.length === 0) return '<p>No meeting notes.</p>';
+        return '<ul>' + cards.map(c => {
+          const comments = Array.isArray(c.comments) ? c.comments.length : 0;
+          const attachments = Array.isArray(c.attachments) ? c.attachments.length : 0;
+          const desc = esc(String(c.desc || '').slice(0, 300));
+          return `<li>${esc(c.dateLastActivity || '')} ${esc(c.name || '')} ` +
+                 (c.url ? `(<a href="${esc(c.url)}" target="_blank">link</a>) ` : '') +
+                 `– Desc: ${desc}` +
+                 (comments ? ` · ${comments} comments` : '') +
+                 (attachments ? ` · ${attachments} attachments` : '') +
+                 `</li>`;
+        }).join('') + '</ul>';
+      }
+
+      function renderActions(actions = []) {
+        if (!Array.isArray(actions) || actions.length === 0) return '<p>No actions.</p>';
+        return '<ul>' + actions.map(a => {
+          const parts = [esc(a.date || ''), esc(a.type || '')];
+          if (a.member) parts.push(esc(a.member));
+          if (a.card) parts.push(esc(a.card));
+          if (a.list) parts.push(`(${esc(a.list)})`);
+          if (a.text) parts.push('– ' + esc(a.text));
+          return `<li>${parts.join(' · ')}</li>`;
+        }).join('') + '</ul>';
+      }
+    </script>
+  </body>
+  </html>
