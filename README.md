@@ -63,9 +63,22 @@ Set these in `.env`; `webapp.py` will auto-load them.
 ## Backend API Routes
 
 - `GET /api/github/commits`: `owner, repo, branch, since, until`
+- `GET /api/github/org-commits`: `org, since, until, repos(optional comma-list), maxRepos(optional)`
 - `GET|POST /api/trello/meeting-notes`: `boardName, listName, since, until`
-- `GET|POST /api/trello/board-actions`: `boardName, since, until, types`
+- `GET|POST /api/trello/board-actions`: `boardName, since, until, types, inProgressList(optional), completedList(optional)`
 - `POST /api/openai/summarize`: `systemPrompt, input`
+
+### Response Shapes
+
+- `/api/github/org-commits` → `{ groups: [{ repo, url, branch, commits: [{ sha, url, message, author, date }] }] }`
+- `/api/trello/board-actions` → `{ groups: [{ column: 'In Progress'|'Completed'|..., cards: [{ cardId, name, url, labels: [{name,color}], owners: [{fullName,username}], completion: {completed,total}, actions: [{ date, type, member, text, attachment }] }] }] }`
+- `/api/trello/meeting-notes` → `[{ cardId, name, url, titleDate, addedDate, dateLastActivity, desc, comments: [{ text, date, member }], attachments: [{ name, url, mimeType }] }]`
+
+Notes:
+- Meeting Notes classification uses the date in the card title when available. Supported formats: `YYYY-MM-DD`, `YYYY/MM/DD`, `MM-DD`, `MM/DD`. The end date in the filter range is inclusive. If no parsable title date exists, `dateLastActivity` is used as a fallback.
+- Frontend Meeting Notes are displayed in descending order by date (newest first). The entry shows `titleDate` followed by `(Added Date: ISO)` in parentheses.
+- Trello actions are filtered to: moves/creates into target columns, comments that include links, checklist items marked complete, and attachments added (not removed).
+- Trello results are grouped strictly under two columns: `In Progress` and `Completed`. If `inProgressList` / `completedList` are provided, only those are used. Matching is case-insensitive and recognizes common aliases (e.g., `complete`, `done` for Completed; `in progress`, `doing` for In Progress). If a card appears in both, `Completed` takes precedence.
 
 ## Notes
 

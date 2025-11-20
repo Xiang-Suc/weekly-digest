@@ -1,5 +1,6 @@
 import os
 import json
+import re
 from datetime import datetime
 from flask import Flask, request, jsonify, make_response
 import requests
@@ -112,6 +113,118 @@ def github_commits():
 
     return jsonify(normalized)
 
+@app.route('/api/github/org-commits', methods=['GET', 'OPTIONS'])
+def github_org_commits():
+    if request.method == 'OPTIONS':
+        return make_response('', 204)
+
+    org = (request.args.get('org') or '').strip()
+    since = (request.args.get('since') or '').strip()
+    until = (request.args.get('until') or '').strip()
+    repos_filter = (request.args.get('repos') or '').strip()  # optional comma-separated repo names
+    max_repos = int(request.args.get('maxRepos') or '50')
+
+    if not org or not since or not until:
+        return jsonify({'error': 'Missing required params: org, since, until'}), 400
+
+    token = os.getenv('GITHUB_TOKEN', '').strip()
+    headers = {
+        'Accept': 'application/vnd.github+json',
+        **({ 'Authorization': f'Bearer {token}' } if token else {})
+    }
+
+    # List repos in the organization (paginate, up to max_repos)
+    repos = []
+    page = 1
+    try:
+        while len(repos) < max_repos and page < 10:
+            url = f"https://api.github.com/orgs/{org}/repos?per_page=100&page={page}&type=all&sort=updated"
+            r = requests.get(url, headers=headers, timeout=30)
+            if r.status_code >= 400:
+                return jsonify({ 'error': f'GitHub HTTP {r.status_code}', 'details': r.text }), r.status_code
+            batch = r.json() or []
+            repos.extend(batch)
+            if len(batch) < 100:
+                break
+            page += 1
+    except requests.RequestException as e:
+        return jsonify({ 'error': 'GitHub list repos failed', 'details': str(e) }), 502
+
+    # Optional filter by repo names
+    filter_set = {n.strip().lower() for n in repos_filter.split(',') if n.strip()} if repos_filter else None
+    selected = []
+    for r in repos:
+        name = (r.get('name') or '').strip()
+        if not name:
+            continue
+        if filter_set and name.lower() not in filter_set:
+            continue
+        selected.append({
+            'name': name,
+            'full_name': r.get('full_name') or name,
+            'html_url': r.get('html_url') or '',
+            'default_branch': r.get('default_branch') or 'main',
+            'pushed_at': r.get('pushed_at') or ''
+        })
+        if len(selected) >= max_repos:
+            break
+
+    def to_utc_iso(s):
+        try:
+            return datetime.fromisoformat(s.replace('Z', '+00:00')).astimezone().isoformat().replace('+00:00', 'Z')
+        except Exception:
+            try:
+                return datetime.strptime(s, '%Y-%m-%dT%H:%M:%S%z').astimezone().isoformat().replace('+00:00', 'Z')
+            except Exception:
+                return s or ''
+
+    # For each repo, fetch commits in range
+    groups = []
+    for repo in selected:
+        commits = []
+        page = 1
+        try:
+            while page < 10:
+                url = (
+                    f"https://api.github.com/repos/{org}/{repo['name']}/commits"
+                    f"?sha={repo['default_branch']}&since={since}&until={until}&per_page=100&page={page}"
+                )
+                r = requests.get(url, headers=headers, timeout=30)
+                if r.status_code >= 400:
+                    # If commits endpoint fails (e.g., archived), skip repo but continue
+                    break
+                batch = r.json() or []
+                commits.extend(batch)
+                if len(batch) < 100:
+                    break
+                page += 1
+        except requests.RequestException:
+            # Skip on error for this repo
+            commits = []
+
+        normalized = []
+        for c in commits:
+            msg = (c.get('commit') or {}).get('message', '')
+            author_name = ((c.get('commit') or {}).get('author') or {}).get('name') or (c.get('author') or {}).get('login') or ''
+            author_date = ((c.get('commit') or {}).get('author') or {}).get('date') or ''
+            normalized.append({
+                'sha': c.get('sha'),
+                'url': c.get('html_url'),
+                'message': msg,
+                'author': author_name,
+                'date': to_utc_iso(author_date)
+            })
+
+        if normalized:
+            groups.append({
+                'repo': repo['name'],
+                'url': repo['html_url'],
+                'branch': repo['default_branch'],
+                'commits': normalized
+            })
+
+    return jsonify({'groups': groups})
+
 # --- Trello proxy ---
 
 def trello_get(url, params=None):
@@ -166,22 +279,76 @@ def trello_meeting_notes():
                 except Exception:
                     return s or ''
 
-        results = []
-        for c in cards:
-            act_str = c.get('dateLastActivity') or c.get('date') or ''
+        def to_date_str(iso_s):
             try:
-                act_ts = datetime.fromisoformat(act_str.replace('Z', '+00:00')).timestamp()
+                return datetime.fromisoformat(iso_s.replace('Z', '+00:00')).date().isoformat()
             except Exception:
-                act_ts = 0
-            if not act_ts or act_ts < since_t or act_ts >= until_t:
-                continue
+                return ''
+
+        def parse_title_date(name, fallback_year):
+            s = (name or '').strip()
+            # Prefer full year format like YYYY-MM-DD or YYYY/MM/DD
+            m = re.search(r'(\d{4})[\-/](\d{1,2})[\-/](\d{1,2})', s)
+            if m:
+                y, mo, d = int(m.group(1)), int(m.group(2)), int(m.group(3))
+                try:
+                    return f"{y:04d}-{mo:02d}-{d:02d}"
+                except Exception:
+                    pass
+            # Fallback: MM-DD or MM/DD, infer year from since
+            m2 = re.search(r'(\d{1,2})[\-/](\d{1,2})', s)
+            if m2:
+                mo, d = int(m2.group(1)), int(m2.group(2))
+                try:
+                    return f"{fallback_year:04d}-{mo:02d}-{d:02d}"
+                except Exception:
+                    pass
+            return ''
+
+        results = []
+        since_date = to_date_str(since)
+        until_date = to_date_str(until)
+        fallback_year = 0
+        try:
+            fallback_year = datetime.fromisoformat(since.replace('Z', '+00:00')).year
+        except Exception:
+            fallback_year = datetime.utcnow().year
+        for c in cards:
+            # Determine title date from card name for classification
+            title_date = parse_title_date(c.get('name') or '', fallback_year)
+            # If title date exists, use it to decide range; otherwise fallback to activity window
+            if title_date:
+                # Include end date (<= until_date) so 11-20 falls within 11/17–11/20
+                if not (since_date <= title_date <= until_date):
+                    continue
+            else:
+                act_str = c.get('dateLastActivity') or c.get('date') or ''
+                try:
+                    act_ts = datetime.fromisoformat(act_str.replace('Z', '+00:00')).timestamp()
+                except Exception:
+                    act_ts = 0
+                # Include end timestamp (<= until_t)
+                if not act_ts or act_ts < since_t or act_ts > until_t:
+                    continue
             comments = trello_get(f'https://api.trello.com/1/cards/{c.get("id")}/actions', params={'filter': 'commentCard', 'limit': 1000, 'since': since, 'before': until})
             attachments = trello_get(f'https://api.trello.com/1/cards/{c.get("id")}/attachments')
+            # Added date: earliest create/copy action if available
+            added_date_iso = ''
+            try:
+                add_actions = trello_get(f'https://api.trello.com/1/cards/{c.get("id")}/actions', params={'filter': 'all', 'limit': 100})
+                created_events = [a for a in (add_actions or []) if (a.get('type') or '') in {'createCard', 'copyCard'}]
+                if created_events:
+                    earliest = sorted(created_events, key=lambda a: (a.get('date') or ''))[0]
+                    added_date_iso = to_utc_iso(earliest.get('date') or '')
+            except Exception:
+                added_date_iso = ''
             results.append({
                 'cardId': c.get('id'),
                 'name': c.get('name'),
                 'url': c.get('shortUrl'),
                 'dateLastActivity': to_utc_iso(c.get('dateLastActivity') or ''),
+                'titleDate': title_date,
+                'addedDate': added_date_iso,
                 'desc': c.get('desc') or '',
                 'comments': [
                     {
@@ -249,6 +416,15 @@ def trello_board_actions():
         since = (request.args.get('since') or '').strip()
         until = (request.args.get('until') or '').strip()
         types = (request.args.get('types') or '').strip()
+    in_progress_list = None
+    completed_list = None
+    if request.method == 'POST':
+        in_progress_list = (data.get('inProgressList') or '').strip() or None
+        completed_list = (data.get('completedList') or '').strip() or None
+    else:
+        in_progress_list = (request.args.get('inProgressList') or '').strip() or None
+        completed_list = (request.args.get('completedList') or '').strip() or None
+
     if not board_name or not since or not until:
         return jsonify({'error': 'Missing required params: boardName, since, until'}), 400
 
@@ -269,23 +445,176 @@ def trello_board_actions():
         else:
             params['filter'] = 'all'
 
-        actions = trello_get(f'https://api.trello.com/1/boards/{board.get("id")}/actions', params=params)
+        actions = trello_get(f'https://api.trello.com/1/boards/{board.get("id")}/actions', params=params) or []
 
-        def pick(a):
+        # Normalize list names and target columns
+        def norm(s):
+            return (s or '').strip().lower()
+        # Always include common aliases even when explicit names are provided
+        base_in_progress = {'in progress', 'in-progress', 'doing'}
+        base_completed = {'completed', 'complete', 'done'}
+        target_in_progress = (base_in_progress | ({norm(in_progress_list)} if in_progress_list else set()))
+        target_completed = (base_completed | ({norm(completed_list)} if completed_list else set()))
+
+        def action_card_id(a):
+            return ((a.get('data') or {}).get('card') or {}).get('id')
+
+        def action_list_after(a):
+            d = a.get('data') or {}
+            return ((d.get('listAfter') or {}).get('name')) or ((d.get('list') or {}).get('name'))
+
+        # Filter relevant actions: moved/created into target columns; comments with links; checklist complete; attachments added
+        def is_move_or_create_into_target(a):
+            t = (a.get('type') or '').strip()
+            la = norm(action_list_after(a))
+            return ((t == 'updateCard' and la in target_in_progress.union(target_completed)) or
+                    (t == 'createCard' and la in target_in_progress.union(target_completed)) or
+                    (t == 'copyCard' and la in target_in_progress.union(target_completed)) or
+                    (t == 'moveCardToBoard' and la in target_in_progress.union(target_completed)))
+
+        def is_comment_with_link(a):
+            t = (a.get('type') or '').strip()
+            txt = ((a.get('data') or {}).get('text') or '')
+            return t == 'commentCard' and ('http://' in txt or 'https://' in txt)
+
+        def is_checklist_complete(a):
+            t = (a.get('type') or '').strip()
+            d = (a.get('data') or {})
+            state = ((d.get('checkItem') or {}).get('state') or '').strip().lower()
+            return t == 'updateCheckItemStateOnCard' and state == 'complete'
+
+        def is_attachment_added(a):
+            t = (a.get('type') or '').strip()
+            return t == 'addAttachmentToCard'
+
+        # Build card -> target column map based on move/create/copy/add to target columns
+        def column_key_from_action(a):
+            name = action_list_after(a)
+            n = norm(name)
+            if n in target_in_progress:
+                return 'In Progress'
+            if n in target_completed:
+                return 'Completed'
+            return None
+
+        card_target_map = {}
+        for a in actions:
+            if is_move_or_create_into_target(a):
+                cid = action_card_id(a)
+                col = column_key_from_action(a)
+                if cid and col:
+                    prev = card_target_map.get(cid)
+                    # Prefer Completed when conflicting; otherwise use latest seen
+                    if prev != 'Completed':
+                        card_target_map[cid] = col
+
+        # Now filter actions strictly to target cards; always include the qualifying move/create actions
+        filtered = []
+        for a in actions:
+            if is_move_or_create_into_target(a):
+                filtered.append(a)
+                continue
+            cid = action_card_id(a)
+            if cid in card_target_map and (is_comment_with_link(a) or is_checklist_complete(a) or is_attachment_added(a)):
+                filtered.append(a)
+
+        # Group by target column and card
+        # Build a map: { column_key: { cardId: { meta, actions: [] } } }
+        groups_map = {}
+
+        # Fetch minimal list map for board to resolve list names by id
+        lists = trello_get(f'https://api.trello.com/1/boards/{board.get("id")}/lists')
+        list_id_to_name = {l.get('id'): (l.get('name') or '') for l in (lists or [])}
+
+        # Group strictly by target column using card_target_map
+
+        # Cache for card metadata
+        card_meta_cache = {}
+
+        def get_card_meta(card_id):
+            if not card_id:
+                return None
+            if card_id in card_meta_cache:
+                return card_meta_cache[card_id]
+            try:
+                info = trello_get(
+                    f'https://api.trello.com/1/cards/{card_id}',
+                    params={
+                        'fields': 'name,shortUrl,idList,labels',
+                        'members': 'true',
+                        'member_fields': 'fullName,username',
+                        'checklists': 'all'
+                    }
+                )
+                # Compute completion status
+                total = 0
+                completed = 0
+                for cl in (info.get('checklists') or []):
+                    for item in (cl.get('checkItems') or []):
+                        total += 1
+                        if (item.get('state') or '').strip().lower() == 'complete':
+                            completed += 1
+                owners = [{'fullName': m.get('fullName'), 'username': m.get('username')} for m in (info.get('members') or [])]
+                labels = [{'name': lb.get('name'), 'color': lb.get('color')} for lb in (info.get('labels') or [])]
+                meta = {
+                    'cardId': card_id,
+                    'name': info.get('name'),
+                    'url': info.get('shortUrl'),
+                    'listName': list_id_to_name.get(info.get('idList') or '') or '',
+                    'owners': owners,
+                    'labels': labels,
+                    'completion': {'completed': completed, 'total': total}
+                }
+                card_meta_cache[card_id] = meta
+                return meta
+            except Exception:
+                return None
+
+        def pick_action(a):
             data = a.get('data') or {}
-            card = (data.get('card') or {}).get('name')
-            list_name = (data.get('list') or {}).get('name') or ((data.get('listAfter') or {}) .get('name'))
+            card = data.get('card') or {}
+            list_name = (data.get('list') or {}).get('name') or ((data.get('listAfter') or {}).get('name'))
             return {
                 'date': a.get('date'),
                 'type': a.get('type'),
                 'member': (a.get('memberCreator') or {}).get('fullName'),
-                'card': card,
+                'cardId': card.get('id'),
+                'card': card.get('name'),
                 'list': list_name,
                 'text': data.get('text'),
+                'attachment': (data.get('attachment') or {}),
+                'checkItemName': ((data.get('checkItem') or {}).get('name'))
             }
 
-        out = [pick(a) for a in (actions or [])]
-        return jsonify({'actions': out})
+        for a in filtered:
+            cid_for_group = action_card_id(a)
+            col_key = card_target_map.get(cid_for_group) or column_key_from_action(a)
+            if col_key not in groups_map:
+                groups_map[col_key] = {}
+            pa = pick_action(a)
+            cid = pa.get('cardId')
+            if cid not in groups_map[col_key]:
+                meta = get_card_meta(cid) or {'cardId': cid, 'name': pa.get('card'), 'url': '', 'owners': [], 'labels': [], 'completion': {'completed': 0, 'total': 0}}
+                groups_map[col_key][cid] = { 'meta': meta, 'actions': [] }
+            groups_map[col_key][cid]['actions'].append(pa)
+
+        # Convert map to array
+        result_groups = []
+        for col, cards_map in groups_map.items():
+            cards = []
+            for _, entry in cards_map.items():
+                cards.append({ **entry['meta'], 'actions': entry['actions'] })
+            # Sort cards by name for stable output
+            cards.sort(key=lambda x: (x.get('name') or '').lower())
+            result_groups.append({ 'column': col, 'cards': cards })
+
+        # Sort groups by desired order
+        # Ensure only the two target columns are present and ordered
+        order = {'In Progress': 0, 'Completed': 1}
+        result_groups = [g for g in result_groups if g['column'] in order]
+        result_groups.sort(key=lambda g: order.get(g['column'], 99))
+
+        return jsonify({'groups': result_groups})
     except requests.HTTPError as e:
         return jsonify({'error': 'Trello HTTP error', 'details': str(e)}), 502
     except ValueError as e:
