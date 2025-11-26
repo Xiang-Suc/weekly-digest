@@ -118,9 +118,19 @@
         if (!startISO || !endISO) { alert('Please set the week start and end dates.'); return; }
         setLoading(true);
 
+        let repoGroup = null;
         try {
-          state.orgGroups = await fetchOrgCommits({ org: 'zcashme', since: startISO, until: endISO });
-          setProgress(33, 'GitHub org commits loaded');
+          // Fetch commits from specific repo main branch: ZcashUsersGroup/zcashme
+          const repoCommits = await fetchCommits({ owner: 'ZcashUsersGroup', repo: 'zcashme', branch: 'main', since: startISO, until: endISO });
+          repoGroup = { repo: 'ZcashUsersGroup/zcashme', url: 'https://github.com/ZcashUsersGroup/zcashme', branch: 'main', commits: repoCommits };
+          setProgress(20, 'Repo commits (zcashme) loaded');
+        } catch (e) { console.error('GitHub API Error', e); alert('Repo commits fetch failed: ' + (e?.message || e)); setProgress(20, 'Repo commits failed'); }
+
+        try {
+          const orgGroups = await fetchOrgCommits({ org: 'zcashme', since: startISO, until: endISO });
+          // Merge org groups after repo group if available
+          state.orgGroups = repoGroup ? [repoGroup, ...orgGroups] : orgGroups;
+          setProgress(40, 'GitHub org commits loaded');
         } catch (e) { console.error('GitHub API Error', e); alert('GitHub org commits fetch failed: ' + (e?.message || e)); setProgress(33, 'GitHub org commits failed'); }
 
         try {
