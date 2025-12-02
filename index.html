@@ -11,57 +11,62 @@
   </head>
   <body>
     <header>
-      <h1>Weekly Digest (WDWDLW)</h1>
-      <p>Zcash Me · Meeting Notes + GitHub Commits + Trello Activity</p>
+      <div class="container">
+        <h1>Weekly Digest (WDWDLW)</h1>
+        <p>Zcash Me · Meeting Notes + GitHub Commits + Trello Activity</p>
+      </div>
     </header>
 
-    <section class="controls">
-      <div class="row">
-        <label>Week Start
-          <input type="date" id="startDate" />
-        </label>
-        <label>Week End
-          <input type="date" id="endDate" />
-        </label>
-        <label>Time Zone
-          <select id="tz">
-            <option value="UTC">UTC</option>
-          </select>
-        </label>
+    <main class="container">
+      <section class="controls">
+        <div class="row">
+          <label>Week Start
+            <input type="date" id="startDate" />
+          </label>
+          <label>Week End
+            <input type="date" id="endDate" />
+          </label>
+          <label>Time Zone
+            <select id="tz">
+              <option value="UTC">UTC</option>
+            </select>
+          </label>
+        </div>
+      </section>
+
+      <section class="actions">
+        <button id="btnGenerate">Load Weekly Data</button>
+        <span id="progressText" class="progress-text"></span>
+      </section>
+      <div id="progress" class="progress hidden">
+        <div id="progressFill" class="progress-bar"></div>
       </div>
-    </section>
 
-    <section class="actions">
-      <button id="btnGenerate">Load Weekly Data</button>
-      <span id="progressText" class="progress-text"></span>
-    </section>
-    <div id="progress" class="progress hidden">
-      <div id="progressFill" class="progress-bar"></div>
-    </div>
-
-    <section class="results">
+      <section class="results">
       <div class="section-header section-main">
         <h2>Transcripts Summary (Meeting Notes)</h2>
-        <button id="toggleTranscripts" class="section-toggle" aria-expanded="true" aria-controls="transcriptsSummary" type="button" aria-label="Toggle transcripts">▾ Collapse</button>
+        <button id="toggleTranscripts" class="section-toggle" aria-expanded="true" aria-controls="transcriptsSummary" type="button" aria-label="Collapse">▾ Collapse</button>
       </div>
       <div id="transcriptsSummary"></div>
-    </section>
+      </section>
 
-    <section class="results">
+      <section class="results">
       <div class="section-header section-main">
         <h2>GitHub Commits by Repository</h2>
-        <button id="toggleGitHub" class="section-toggle" aria-expanded="true" aria-controls="githubCommits" type="button" aria-label="Toggle GitHub commits">▾ Collapse</button>
+        <button id="toggleGitHub" class="section-toggle" aria-expanded="true" aria-controls="githubCommits" type="button" aria-label="Collapse">▾ Collapse</button>
       </div>
       <div id="githubCommits"></div>
-    </section>
+      </section>
 
-    <section class="results">
+      <section class="results">
       <div class="section-header section-main">
         <h2>Trello Board Activity</h2>
-        <button id="toggleTrello" class="section-toggle" aria-expanded="true" aria-controls="trelloActivity" type="button" aria-label="Toggle Trello activity">▾ Collapse</button>
+        <button id="toggleTrello" class="section-toggle" aria-expanded="true" aria-controls="trelloActivity" type="button" aria-label="Collapse">▾ Collapse</button>
       </div>
       <div id="trelloActivity"></div>
-    </section>
+      </section>
+
+    </main>
 
     <script type="module">
       import { fetchCommits, fetchOrgCommits } from './src/github.js';
@@ -154,11 +159,12 @@
 
       function esc(s) { return String(s||'').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
       function firstLine(s){return String(s||'').split('\n')[0].trim()}
+      function fmtDate(s){ try { const d = new Date(String(s||'')); if(isNaN(d.getTime())) return String(s||''); const iso = d.toISOString(); return iso.slice(0,10)+' '+iso.slice(11,16); } catch { return String(s||''); } }
 
       function renderCommits(commits = []) {
         if (!Array.isArray(commits) || commits.length === 0) return '<p>No commits.</p>';
         return '<ul>' + commits.map(c => 
-          `<li>${esc(c.date || '')} ${esc(c.author || '')}: ${esc(firstLine(c.message || ''))} ` +
+          `<li><span class="meta">${esc(fmtDate(c.date || ''))} · ${esc(c.author || '')}</span> — ${esc(firstLine(c.message || ''))} ` +
           (c.url ? `<a href="${esc(c.url)}" target="_blank">link</a>` : '') + '</li>'
         ).join('') + '</ul>';
       }
@@ -168,7 +174,7 @@
         return groups.map((g, idx) => {
           const slug = (s) => String(s||'').toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-+|-+$/g,'');
           const secId = `gh-repo-${slug(g.repo||'repo')}-${idx}`;
-          const header = `<div class="section-header section-sub"><h3>${esc(g.repo || '')}${g.branch ? ` · ${esc(g.branch)}` : ''} ${g.url ? `(<a href="${esc(g.url)}" target="_blank">repo</a>)` : ''}</h3><button id="btn-${secId}" class="section-toggle" aria-expanded="true" aria-controls="${secId}" type="button" aria-label="Toggle repo">▾ Collapse</button></div>`;
+          const header = `<div class="section-header section-sub"><h3>${esc(g.repo || '')}${g.branch ? ` · ${esc(g.branch)}` : ''} ${g.url ? `(<a href="${esc(g.url)}" target="_blank">repo</a>)` : ''}</h3><button id="btn-${secId}" class="section-toggle" aria-expanded="true" aria-controls="${secId}" type="button" aria-label="折叠">▾ 折叠</button></div>`;
           const body = `<div id="${secId}">${renderCommits(g.commits || [])}</div>`;
           return header + body;
         }).join('');
@@ -211,36 +217,38 @@
           return `<h4>${esc(c.name || '')}${labels}${owners}${comp}${link}</h4>`;
         };
         const renderAction = (a) => {
-          const date = esc(a.date || '');
+          const date = esc(fmtDate(a.date || ''));
           const who = esc(a.member || '');
           if (a.type === 'commentCard' && a.text) {
             const txt = String(a.text || '');
             const clip = txt.length > 200 ? txt.slice(0, 200) + '…' : txt;
-            return `<li>${date} comment · ${who} – ${esc(clip)}</li>`;
+            return `<li><span class="meta">${date} · ${who}</span> <span class="chip chip-comment">Comment</span> — ${esc(clip)}</li>`;
           }
           if (a.type === 'updateCheckItemStateOnCard') {
             const name = esc(a.checkItemName || '');
-            return `<li>${date} checklist completed · ${who} – ${name}</li>`;
+            return `<li><span class="meta">${date} · ${who}</span> <span class="chip chip-check">Checklist Done</span> — ${name}</li>`;
           }
           if (a.type === 'addAttachmentToCard' && a.attachment && a.attachment.name && a.attachment.url) {
-            return `<li>${date} attachment added · ${who} – <a href="${esc(a.attachment.url)}" target="_blank">${esc(a.attachment.name)}</a></li>`;
+            return `<li><span class="meta">${date} · ${who}</span> <span class="chip chip-attach">Attachment</span> — <a href="${esc(a.attachment.url)}" target="_blank">${esc(a.attachment.name)}</a></li>`;
           }
           if (a.type === 'updateCard' || a.type === 'createCard' || a.type === 'copyCard' || a.type === 'moveCardToBoard') {
             const list = esc(a.list || '');
-            return `<li>${date} moved/added · ${who} → ${list}</li>`;
+            return `<li><span class="meta">${date} · ${who}</span> <span class="chip chip-move">Move/Create</span> — ${list}</li>`;
           }
           const fallback = [date, esc(a.type || '')];
           if (who) fallback.push(who);
-          return `<li>${fallback.join(' · ')}</li>`;
+          return `<li><span class="meta">${fallback.join(' · ')}</span></li>`;
         };
         return groups.map((g, gi) => {
           const slug = (s) => String(s||'').toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-+|-+$/g,'');
           const colId = `trello-col-${slug(g.column||'column')}-${gi}`;
-          const groupHeader = `<div class="section-header section-sub"><h3>${esc(g.column || '')}</h3><button id="btn-${colId}" class="section-toggle" aria-expanded="true" aria-controls="${colId}" type="button" aria-label="Toggle column">▾ Collapse</button></div>`;
+          const kind = String(g.column||'').toLowerCase();
+          const colClass = kind.includes('progress') ? 'trello-col trello-col-in' : (kind.includes('complete') ? 'trello-col trello-col-completed' : 'trello-col');
+          const groupHeader = `<div class="section-header section-sub ${colClass}"><h3>${esc(g.column || '')}</h3><button id="btn-${colId}" class="section-toggle" aria-expanded="true" aria-controls="${colId}" type="button" aria-label="Collapse">▾ Collapse</button></div>`;
           const cardsHtml = (g.cards || []).map((c, ci) => {
             const cardIdBase = c.id ? String(c.id) : slug(c.name || 'card');
             const cardId = `trello-card-${cardIdBase}-${gi}-${ci}`;
-            const header = `<div class="section-header section-sub"><h4>${esc(c.name || '')}${(Array.isArray(c.labels) && c.labels.length) ? ' · ' + c.labels.map(lb => esc(lb.name || lb.color || '')).join(', ') : ''}${(Array.isArray(c.owners) && c.owners.length) ? ' · ' + c.owners.map(o => esc(o.fullName || o.username || '')).join(', ') : ''}${c.completion ? ` · ${c.completion.completed || 0}/${c.completion.total || 0} done` : ''}${c.url ? ` (<a href="${esc(c.url)}" target="_blank">link</a>)` : ''}</h4><button id="btn-${cardId}" class="section-toggle" aria-expanded="true" aria-controls="${cardId}" type="button" aria-label="Toggle card">▾ Collapse</button></div>`;
+            const header = `<div class="section-header section-sub"><h4>${esc(c.name || '')}${(Array.isArray(c.labels) && c.labels.length) ? ' · ' + c.labels.map(lb => esc(lb.name || lb.color || '')).join(', ') : ''}${(Array.isArray(c.owners) && c.owners.length) ? ' · ' + c.owners.map(o => esc(o.fullName || o.username || '')).join(', ') : ''}${c.completion ? ` · ${c.completion.completed || 0}/${c.completion.total || 0} done` : ''}${c.url ? ` (<a href="${esc(c.url)}" target="_blank">link</a>)` : ''}</h4><button id="btn-${cardId}" class="section-toggle" aria-expanded="true" aria-controls="${cardId}" type="button" aria-label="折叠">▾ 折叠</button></div>`;
             const actionsHtml = '<ul>' + (c.actions || []).map(renderAction).join('') + '</ul>';
             return header + `<div id="${cardId}">${actionsHtml}</div>`;
           }).join('');
