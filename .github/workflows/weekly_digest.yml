@@ -2,7 +2,7 @@ name: Weekly Digest Automation
 
 on:
   schedule:
-    - cron: '30 5 * * 0' # Every Sunday at 05:30 UTC (12:30 AM EST)
+    - cron: '0 1 * * 1' # Every Monday at 01:00 UTC (09:00 AM SGT)
   workflow_dispatch:
 
 jobs:
