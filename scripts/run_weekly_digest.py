@@ -96,6 +96,8 @@ def main():
     TRELLO_BOARD = os.getenv('TRELLO_BOARD', 'Zcash Me')
     TRELLO_NOTES_LIST = os.getenv('TRELLO_NOTES_LIST', 'Meeting Notes')
     TRELLO_TARGET_LIST_ID = os.getenv('TRELLO_TARGET_LIST_ID')
+    MEMBER_ID = "6374510bf2aa0e0071120277"
+    LABEL_ID = "6924d2b9e964c12aa4cb9c9a"
     
     start_date, end_date = get_last_week_dates()
     print(f"Generating digest for: {start_date} to {end_date}")
@@ -165,7 +167,9 @@ def main():
             card_data = {
                 'idList': target_list_id,
                 'name': card_title,
-                'desc': report_md[:16000] # Trello limit is 16384 chars
+                'desc': report_md[:16000], # Trello limit is 16384 chars
+                'idMembers': [MEMBER_ID],
+                'idLabels': [LABEL_ID]
             }
             new_card = trello_post('https://api.trello.com/1/cards', data=card_data)
             print(f"Card created: {new_card.get('url')}")
